@@ -1,0 +1,12 @@
+{
+  "name": "newtovaux/dev-bootstrap",
+  "description": "Dev-only bootstrap script exposed via vendor/bin/bootstrap for PHP Laravel projects.",
+  "type": "library",
+  "license": "MIT",
+  "bin": [
+    "bin/bootstrap"
+  ],
+  "require": {
+    "php": ">=7.4"
+  }
+}

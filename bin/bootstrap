@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# Ensure we run from the project root (where composer.json lives), not from vendor/
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$PROJECT_ROOT"
+
+# Setup colours
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
+# Function: print message + line on same row
+print_msg_line() {
+  local color="$1"
+  local message="$2 "
+  local cols=${COLUMNS:-$(tput cols)}
+  local msg_len=${#message}
+  local line_len=$((cols - msg_len))
+
+  # Print message, then fill rest of line with dashes
+  printf "${color}%s${NC}" "$message"
+  printf "${color}%*s${NC}\n" "$line_len" '' | tr ' ' '-'
+}
+
+print_msg_line "$GREEN" "Starting bootstrap process"
+
+# Check for a .env
+
+print_msg_line "$GREEN" "Checking for .env file"
+
+if ! test -f ".env"; then
+    if [ ! -f ".env.example" ]; then
+        print_msg_line "$RED" "Missing .env.example — cannot create .env"
+        exit 1
+    fi
+    print_msg_line "$GREEN" "Environment .env does not exist, copying example"
+    cp .env.example .env
+    # Generate new DB password
+    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=$(openssl rand -base64 32 | tr -d '\n')|g" .env
+fi
+
+# Load .env
+
+print_msg_line "$GREEN" "Loading .env file"
+
+export $(grep -v '^#' .env | xargs)
+
+# Check for docker
+
+print_msg_line "$GREEN" "Checking Docker accessibility"
+
+if ! docker info >/dev/null 2>&1; then
+    printf "${RED}Docker is not running or not accessible. ${NC}\n"
+    exit 1
+fi
+
+# Stop other containers
+
+print_msg_line "$GREEN" "Checking for running containers"
+
+containers=$(docker ps -q)
+if [ ! -z "$containers" ]; then
+    docker stop $containers
+fi
+
+if [ ! -f "./vendor/bin/sail" ]; then
+    print_msg_line "$YELLOW" "Installing Laravel Sail"
+    docker run --rm -v $(pwd):/app -u "$(id -u):$(id -g)" -w /app composer composer require laravel/sail --dev --ignore-platform-reqs --no-scripts
+fi
+
+# Sail down
+
+print_msg_line "$GREEN" "Bringing down existing Sail containers"
+
+./vendor/bin/sail down
+
+# Remove existing volumes
+
+print_msg_line "$GREEN" "Removing existing Docker volumes"
+
+docker volume ls -qf dangling=true | xargs -r docker volume rm
+
+# Get latest images
+
+print_msg_line "$GREEN" "Pulling latest Docker images"
+
+docker compose pull --ignore-buildable
+
+# Remove log files
+
+print_msg_line "$GREEN" "Clearing storage/logs/laravel.log file"
+
+echo "" > storage/logs/laravel.log
+
+# Install dependencies via Docker
+
+print_msg_line "$GREEN" "Installing Composer dependencies"
+
+docker run --rm -v $(pwd):/app -u "$(id -u):$(id -g)" -w /app composer composer install --ignore-platform-reqs
+
+# Get the latest Sail tooling
+
+print_msg_line "$GREEN" "Updating Laravel Sail"
+
+docker run --rm -v $(pwd):/app -u "$(id -u):$(id -g)" -w /app composer composer update laravel/sail --ignore-platform-reqs --no-scripts
+
+# Sail up
+
+print_msg_line "$GREEN" "Bringing up Sail containers"
+
+./vendor/bin/sail up -d
+
+# Daily stamp check
+
+STAMP_FILE="/tmp/${APP_NAME}_bootstrap_stamp"
+TODAY="$(date +%Y-%m-%d)"
+
+# Check if today's stamp exists
+if [[ -f "$STAMP_FILE" ]] && grep -q "$TODAY" "$STAMP_FILE"; then
+    print_msg_line "$RED" "Skipping daily tasks, already run today: ${STAMP_FILE}"
+else
+    print_msg_line "$GREEN" "Running daily tasks"
+
+    # Composer update
+    print_msg_line "$GREEN" "Updating Composer packages"
+    docker run --rm -v $(pwd):/app -u "$(id -u):$(id -g)" -w /app composer composer update --ignore-platform-reqs --no-scripts
+
+    # NPM update
+    print_msg_line "$GREEN" "Updating NPM packages"
+    ./vendor/bin/sail npm update
+
+    # Commit any lock file changes
+    print_msg_line "$GREEN" "Committing any lock file changes"
+
+    # Unstage everything currently staged (keep your local changes)
+    git reset
+
+    # Stage and commit any changes to lock files
+    git add ./composer.lock  ./package-lock.json || true
+    git commit -m "chore: updates" || true
+    git push origin HEAD || true
+
+    # Update the stamp file
+    echo "$TODAY" > "$STAMP_FILE"
+fi
+
+# Application Key Generation
+
+print_msg_line "$GREEN" "Generating application key"
+
+./vendor/bin/sail artisan key:generate
+
+# NPM install
+
+print_msg_line "$GREEN" "Installing NPM dependencies"
+
+./vendor/bin/sail npm ci --audit false
+
+# Remove the hot file and then build for production
+
+print_msg_line "$GREEN" "Building assets for production"
+
+rm -f ./public/hot
+./vendor/bin/sail npm run build
+
+# Migrate & Seed
+
+print_msg_line "$GREEN" "Running migrations and seeders"
+
+./vendor/bin/sail artisan migrate:fresh --seed
+
+# Clear the caches, regenerate the caches, and dump autoload
+
+print_msg_line "$GREEN" "Clearing and regenerating caches"
+
+./vendor/bin/sail artisan optimize:clear
+./vendor/bin/sail artisan optimize
+./vendor/bin/sail composer dump-autoload
+
+# Storage and Permissions
+
+print_msg_line "$GREEN" "Setting up storage link"
+
+if [ ! -L public/storage ]; then
+    ./vendor/bin/sail artisan storage:link
+fi
+#chmod -R 775 storage bootstrap/cache
+#chown -R www-data:www-data storage bootstrap/cache
+
+# Run dev
+
+./vendor/bin/sail npm run dev &
+
+if [ -n "${REMOTE_CONTAINERS:+x}" ]; then
+    # In a dev container, do nothing
+    echo
+else
+    # Run browser, test if in WSL
+    if cat /proc/version | grep -qi "microsoft"; then
+        explorer.exe http://localhost/
+    else
+        xdg-open http://localhost/
+    fi
+fi
+
+
+# Show logs
+
+#./vendor/bin/sail artisan pail
+
+print_msg_line "$GREEN" "Bootstrap process complete!"
