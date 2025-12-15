@@ -3,7 +3,14 @@
 set -euo pipefail
 
 # Ensure we run from the project root (where composer.json lives), not from vendor/
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+PROJECT_ROOT="$(pwd)"
+while [ ! -f "$PROJECT_ROOT/composer.json" ]; do
+    if [ "$PROJECT_ROOT" = "/" ]; then
+        echo "Error: Could not find composer.json in any parent directory."
+        exit 1
+    fi
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
 cd "$PROJECT_ROOT"
 
 # Setup colours
@@ -22,10 +29,11 @@ print_msg_line() {
 
   # Print message, then fill rest of line with dashes
   printf "${color}%s${NC}" "$message"
-  printf "${color}%*s${NC}\n" "$line_len" '' | tr ' ' '-'
+  printf "${color}%*s${NC}\n" "$line_len" '' | tr ' ' '.'
 }
 
 print_msg_line "$GREEN" "Starting bootstrap process"
+print_msg_line "$GREEN" "Project root: $PROJECT_ROOT"
 
 # Check for a .env
 
