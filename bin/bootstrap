@@ -22,18 +22,33 @@ NC='\033[0m' # No Color
 # Function: print message + line on same row
 print_msg_line() {
   local color="$1"
-  local message="$2 "
-  local cols=${COLUMNS:-$(tput cols)}
+  local message="$2 "      # trailing space before dots
+  local no_dots="${3-}"    # optional flag: any value means no dots
+
+  local cols=${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}
   local msg_len=${#message}
   local line_len=$((cols - msg_len))
+  (( line_len < 0 )) && line_len=0
 
-  # Print message, then fill rest of line with dashes
-  printf "${color}%s${NC}" "$message"
-  printf "${color}%*s${NC}\n" "$line_len" '' | tr ' ' '.'
+  # Print the message
+  printf '%b%s%b' "$color" "$message" "$NC"
+
+  # If flag provided, just end the line
+  if [ -n "$no_dots" ]; then
+    printf '\n'
+    return
+  fi
+
+  # Otherwise fill with dots
+  printf -v pad '%*s' "$line_len" ''
+  pad=${pad// /.}
+  printf '%b%s%b\n' "$color" "$pad" "$NC"
 }
 
-print_msg_line "$GREEN" "Starting bootstrap process"
-print_msg_line "$GREEN" "Project root: $PROJECT_ROOT"
+echo
+
+print_msg_line "$GREEN" "Starting bootstrap process" true
+print_msg_line "$YELLOW" "Project root: $PROJECT_ROOT" true
 
 # Check for a .env
 
