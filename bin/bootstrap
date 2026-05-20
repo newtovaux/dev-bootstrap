@@ -217,15 +217,18 @@ fi
 
 ./vendor/bin/sail npm run dev &
 
+APP_PORT=${APP_PORT:-80}
+URL="http://localhost:${APP_PORT}/"
+
 if [ -n "${REMOTE_CONTAINERS:+x}" ]; then
     # In a dev container, do nothing
     echo
 else
     # Run browser, test if in WSL
     if cat /proc/version | grep -qi "microsoft"; then
-        explorer.exe http://localhost/
+        explorer.exe "$URL"
     else
-        xdg-open http://localhost/
+        xdg-open "$URL"
     fi
 fi
 
