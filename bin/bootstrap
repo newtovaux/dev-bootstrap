@@ -19,6 +19,23 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
+# Function: wait for a Docker container to report healthy
+wait_for_healthy() {
+    local container="$1"
+    local max_attempts=30
+    local attempt=0
+
+    until [[ "$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null)" == "healthy" ]]; do
+        attempt=$((attempt + 1))
+        if [[ $attempt -ge $max_attempts ]]; then
+            print_msg_line "$RED" "Container $container did not become healthy in time" true
+            return 1
+        fi
+        sleep 2
+    done
+    print_msg_line "$GREEN" "Container $container is healthy" true
+}
+
 # Function: print message + line on same row
 print_msg_line() {
   local color="$1"
@@ -135,6 +152,14 @@ docker run --rm -v $(pwd):/app -u "$(id -u):$(id -g)" -w /app composer composer 
 print_msg_line "$GREEN" "Bringing up Sail containers"
 
 ./vendor/bin/sail up -d
+
+# Check health of containers
+
+print_msg_line "$GREEN" "Checking health of Sail containers"
+
+while IFS= read -r container; do
+    wait_for_healthy "$container"
+done < <(docker compose ps -q | xargs -r docker inspect --format '{{if .State.Health}}{{.Name}}{{end}}' | sed 's|^/||' | grep .)
 
 # Daily stamp check
 
